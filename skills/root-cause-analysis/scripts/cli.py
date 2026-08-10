@@ -74,22 +74,22 @@ def cmd_upload(args: argparse.Namespace, config: Config, span=None) -> int:
 
 @trace(name="Embed RCA analysis", span_type=SpanType.CHAIN if SpanType else None)
 def cmd_embed(args: argparse.Namespace, config: Config, span=None) -> int:
-    """Embed completed RCA (step1/4/5) into pgvector for historical similarity search."""
+    """Store completed RCA (step1/4/5) in mem0 memory layer."""
     if __package__ is None:
-        from scripts import vector
+        from scripts import memory
     else:
-        from . import vector
+        from . import memory
 
     job_id = args.job_id
     analysis_dir = config.analysis_dir / job_id
 
-    if not config.has_pgvector():
+    if not config.has_memory_store():
         print(
-            "Skipping embed: pgvector not configured "
+            "Skipping embed: memory store not configured "
             "(set PGVECTOR_HOST / PGVECTOR_DB_NAME / PGVECTOR_DB_USER / PGVECTOR_DB_PASSWORD)"
         )
         if span:
-            span.set_outputs({"job_id": job_id, "skipped": True, "reason": "pgvector_not_configured"})
+            span.set_outputs({"job_id": job_id, "skipped": True, "reason": "memory_store_not_configured"})
         return 0
 
     step1 = load_step(analysis_dir, 1)
@@ -113,71 +113,35 @@ def cmd_embed(args: argparse.Namespace, config: Config, span=None) -> int:
 
     step4 = load_step(analysis_dir, 4)  # optional
 
-    # Ensure table name from config is visible to vector helpers
-    if config.pgvector_table:
-        os.environ.setdefault("PGVECTOR_TABLE", config.pgvector_table)
-    if config.pgvector_host:
-        os.environ.setdefault("PGVECTOR_HOST", config.pgvector_host)
-    if config.pgvector_port:
-        os.environ.setdefault("PGVECTOR_PORT", str(config.pgvector_port))
-    if config.pgvector_db_name:
-        os.environ.setdefault("PGVECTOR_DB_NAME", config.pgvector_db_name)
-    if config.pgvector_db_user:
-        os.environ.setdefault("PGVECTOR_DB_USER", config.pgvector_db_user)
-    if config.pgvector_db_password:
-        os.environ.setdefault("PGVECTOR_DB_PASSWORD", config.pgvector_db_password)
-
     try:
-        vector.setup_pgvector_table(config.pgvector_table)
-        metadata = vector.build_rca_metadata(step1, step4, step5)
-        row_id = vector.upsert_rca_embedding(metadata, table=config.pgvector_table)
+        result = memory.store_rca_memory(config, job_id, step1, step4, step5)
     except Exception as e:
-        error_message = f"Failed to embed RCA for job {job_id}: {e}"
+        error_message = f"Failed to store RCA memory for job {job_id}: {e}"
         print(f"Error: {error_message}")
         if span:
             span.set_outputs({"error": error_message})
         return 1
 
-    print(f"Embedded job {job_id} as row id={row_id}")
+    print(f"Stored job {job_id} in memory layer")
     if span:
-        span.set_outputs(
-            {
-                "job_id": job_id,
-                "row_id": row_id,
-                "root_cause_category": metadata.get("root_cause_category"),
-                "catalog_item": metadata.get("catalog_item"),
-            }
-        )
+        span.set_outputs({"job_id": job_id, "result": result})
     return 0
 
 
 @trace(name="Query similar RCAs", span_type=SpanType.RETRIEVER if SpanType else None)
 def cmd_similar(args: argparse.Namespace, config: Config, span=None) -> int:
-    """Query pgvector for RCAs similar to a job or free-text query."""
+    """Query mem0 for RCAs similar to a job or free-text query."""
     if __package__ is None:
-        from scripts import vector
+        from scripts import memory
     else:
-        from . import vector
+        from . import memory
 
-    if not config.has_pgvector():
+    if not config.has_memory_store():
         print(
-            "Error: pgvector not configured "
+            "Error: memory store not configured "
             "(set PGVECTOR_HOST / PGVECTOR_DB_NAME / PGVECTOR_DB_USER / PGVECTOR_DB_PASSWORD)"
         )
         return 1
-
-    if config.pgvector_table:
-        os.environ.setdefault("PGVECTOR_TABLE", config.pgvector_table)
-    if config.pgvector_host:
-        os.environ.setdefault("PGVECTOR_HOST", config.pgvector_host)
-    if config.pgvector_port:
-        os.environ.setdefault("PGVECTOR_PORT", str(config.pgvector_port))
-    if config.pgvector_db_name:
-        os.environ.setdefault("PGVECTOR_DB_NAME", config.pgvector_db_name)
-    if config.pgvector_db_user:
-        os.environ.setdefault("PGVECTOR_DB_USER", config.pgvector_db_user)
-    if config.pgvector_db_password:
-        os.environ.setdefault("PGVECTOR_DB_PASSWORD", config.pgvector_db_password)
 
     query_text = args.text
     category = args.category
@@ -196,8 +160,8 @@ def cmd_similar(args: argparse.Namespace, config: Config, span=None) -> int:
             if span:
                 span.set_outputs({"error": error_message})
             return 1
-        metadata = vector.build_rca_metadata(step1, step4, step5)
-        query_text = vector.build_embedding_text(metadata)
+        metadata = memory.build_rca_metadata(step1, step4, step5)
+        query_text = memory.build_embedding_text(metadata)
         if args.filter:
             if not category:
                 category = metadata.get("root_cause_category") or None
@@ -209,12 +173,12 @@ def cmd_similar(args: argparse.Namespace, config: Config, span=None) -> int:
         return 1
 
     try:
-        results = vector.query_similar(
+        results = memory.search_similar(
+            config,
             query_text,
             limit=args.limit,
             category=category,
             catalog_item=catalog_item,
-            table=config.pgvector_table,
         )
     except Exception as e:
         print(f"Error: similarity query failed: {e}")
@@ -689,13 +653,13 @@ def main() -> int:
 
     # embed command
     embed_parser = subparsers.add_parser(
-        "embed", help="Embed completed RCA into pgvector for historical search"
+        "embed", help="Store completed RCA in mem0 memory layer for historical search"
     )
     embed_parser.add_argument("--job-id", required=True, help="Job ID whose step5 to embed")
 
     # similar command
     similar_parser = subparsers.add_parser(
-        "similar", help="Query pgvector for similar historical RCAs"
+        "similar", help="Query mem0 for similar historical RCAs"
     )
     similar_parser.add_argument("--job-id", help="Build query from this job's analysis artifacts")
     similar_parser.add_argument("--text", help="Free-text similarity query")

@@ -168,7 +168,7 @@ python3 -m venv .venv
 # Upload analysis to the Jumpbox
 python scripts/cli.py upload --job-id <job-id>
 
-# Embed the completed RCA into pgvector for historical similarity search
+# Store the completed RCA in the memory layer for historical similarity search
 # (best-effort: skips cleanly when PGVECTOR_* is not configured)
 python scripts/cli.py embed --job-id <job-id>
 ```

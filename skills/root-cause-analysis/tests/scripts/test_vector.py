@@ -1,6 +1,6 @@
 """Unit tests for RCA embedding metadata helpers (no live DB required)."""
 
-from scripts.vector import build_embedding_text, build_rca_metadata
+from scripts.memory import build_embedding_text, build_rca_metadata
 
 
 def _sample_job_context():

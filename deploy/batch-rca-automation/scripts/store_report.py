@@ -15,6 +15,24 @@ import psycopg2
 import psycopg2.sql
 from utils import connect_db, load_config
 
+sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), "..", "..", "..", "skills", "root-cause-analysis")))
+
+def _try_store_mem0(config: dict[str, Any], job: dict[str, Any], jid: str) -> None:
+    """Best-effort mem0 memory storage for a batch RCA result."""
+    try:
+        from scripts.memory import store_batch_rca_memory
+        from scripts.config import Config
+        from pathlib import Path
+
+        base_dir = Path(__file__).resolve().parents[3] / "skills" / "root-cause-analysis"
+        rca_config = Config.from_env(base_dir)
+        if not rca_config.has_memory_store():
+            return
+        store_batch_rca_memory(rca_config, job)
+        print(f"[MEM0] Stored job {jid} in memory layer")
+    except Exception as e:
+        print(f"[WARN] mem0 store failed for job {jid}: {e}", file=sys.stderr)
+
 MATCH_THRESHOLD = 0.85
 LOOKBACK_HOURS = 4
 
@@ -136,6 +154,13 @@ def store_report(
                     )
 
     conn.commit()
+
+    for job in jobs:
+        jid = str(job.get("job_id", ""))
+        status = job.get("status")
+        if status == "analyzed" and job.get("root_cause_summary"):
+            _try_store_mem0(config, job, jid)
+
     return True
 
 

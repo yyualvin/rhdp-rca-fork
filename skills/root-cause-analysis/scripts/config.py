@@ -95,13 +95,15 @@ class Config:
     # SSH configuration
     ssh_jumpbox_alias: str = ""
     bastion_ssh_user: str = ""
-    # pgvector configuration for RCA embedding store
+    # pgvector configuration for RCA memory store (used by mem0)
     pgvector_host: str = ""
     pgvector_port: int = 5432
     pgvector_db_name: str = ""
     pgvector_db_user: str = ""
     pgvector_db_password: str = ""
     pgvector_table: str = "rca_analysis_embeddings"
+    # mem0 LLM model for memory extraction/consolidation (routed via Vertex AI)
+    mem0_llm_model: str = "claude-sonnet-4-20250514"
 
     @classmethod
     def from_env(cls, base_dir: Path | None = None) -> "Config":
@@ -169,6 +171,8 @@ class Config:
         )
         pgvector_table = os.environ.get("PGVECTOR_TABLE", "rca_analysis_embeddings")
 
+        mem0_llm_model = os.environ.get("MEM0_LLM_MODEL", "claude-sonnet-4-20250514")
+
         return cls(
             splunk=splunk,
             analysis_dir=analysis_dir,
@@ -192,6 +196,7 @@ class Config:
             pgvector_db_user=pgvector_db_user,
             pgvector_db_password=pgvector_db_password,
             pgvector_table=pgvector_table,
+            mem0_llm_model=mem0_llm_model,
         )
 
     def find_job_log(self, job_id: str) -> Path | None:
@@ -252,3 +257,7 @@ class Config:
             and self.pgvector_db_user
             and self.pgvector_db_password
         )
+
+    def has_memory_store(self) -> bool:
+        """Check if the mem0 memory store is configured (requires pgvector backend)."""
+        return self.has_pgvector()

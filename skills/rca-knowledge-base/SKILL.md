@@ -7,7 +7,7 @@ allowed-tools:
 
 # RCA Knowledge Base
 
-Search and synthesize answers from historical root cause analyses stored in a pgvector database. This skill turns raw vector similarity search results into clear, evidence-backed answers.
+Search and synthesize answers from historical root cause analyses stored in a mem0 memory layer. This skill turns raw similarity search results into clear, evidence-backed answers.
 
 ## When to Use
 
@@ -18,14 +18,15 @@ Search and synthesize answers from historical root cause analyses stored in a pg
 
 ## Prerequisites
 
-This skill requires pgvector to be configured. The following environment variables must be set in `.claude/settings.json` under `env`:
+This skill requires a mem0-compatible pgvector backend. The following environment variables must be set in `.claude/settings.json` under `env`:
 
 - `PGVECTOR_HOST`
 - `PGVECTOR_DB_NAME`
 - `PGVECTOR_DB_USER`
 - `PGVECTOR_DB_PASSWORD`
+- `ANTHROPIC_VERTEX_PROJECT_ID` and `CLOUD_ML_REGION` (for mem0's LLM and embedder via Vertex AI)
 
-RCA analyses must have been previously embedded using the root-cause-analysis skill's embed command.
+RCA analyses must have been previously stored using `cli.py embed` (triggered automatically after each RCA) or via the batch pipeline.
 
 ## Instructions
 
@@ -41,13 +42,13 @@ If the venv creation or dependency install fails, stop and report the error to t
 
 ### Step 2: Formulate the search query [Claude]
 
-Rephrase the user's natural language question into failure-domain terms that align with how RCA embeddings are structured. The embeddings contain:
+Rephrase the user's natural language question into failure-domain terms that align with how RCA memories are structured. The memories contain consolidated facts extracted from RCA analyses including:
 
 - Root cause category and summary
-- Platform, catalog item, and environment
-- Cloud provider, environment type, action
-- Contributing factors
-- Failed task names, actions, and error messages
+- Catalog items, platforms, and cloud providers
+- Actions and environment types
+- Contributing factors and failed tasks
+- Resolution recommendations
 
 **Query formulation guidelines:**
 
@@ -58,8 +59,8 @@ Rephrase the user's natural language question into failure-domain terms that ali
 
 **Optional filters** — if the user's question implies a specific scope, use these CLI flags:
 
-- `--category <cat>` — one of: `configuration`, `infrastructure`, `workload_bug`, `credential`, `resource`, `dependency`
-- `--catalog-item <item>` — a specific workload or catalog item name
+- `--category <cat>` — filter by root cause category (e.g., `configuration`, `infrastructure`, `credential`)
+- `--catalog-item <item>` — filter by a specific workload or catalog item name
 
 ### Step 3: Run the similarity search [Bash]
 
@@ -69,11 +70,11 @@ cd ../root-cause-analysis && .venv/bin/python scripts/cli.py similar --text "<fo
 
 Adjust `--limit` up to 10 if the user asks for more results. Add `--category` or `--catalog-item` flags if determined in Step 2.
 
-If the command fails with a pgvector configuration error, tell the user to set the required environment variables listed in Prerequisites and stop.
+If the command fails with a configuration error, tell the user to set the required environment variables listed in Prerequisites and stop.
 
 If the command returns an empty JSON array `[]`, tell the user no similar past analyses were found. Suggest they:
 - Broaden the search terms
-- Verify that RCA analyses have been embedded (via the root-cause-analysis skill's embed command)
+- Check that RCA analyses have been stored (run `cli.py embed` after completing analyses)
 
 ### Step 4: Synthesize the results [Claude]
 
@@ -81,23 +82,23 @@ Transform the JSON results into a clear answer. The JSON array contains objects 
 
 | Field | Description |
 |-------|-------------|
-| `job_id` | The analyzed job identifier |
+| `id` | Unique memory identifier |
+| `memory` | The consolidated memory text (may combine facts from multiple RCAs) |
 | `root_cause_category` | Category of the root cause |
-| `root_cause_summary` | Human-readable summary of the root cause |
-| `catalog_item` | The workload or catalog item involved |
-| `confidence` | Confidence level of the analysis (high/medium/low) |
+| `confidence` | Confidence level (high/medium/low) |
 | `analyzed_at` | When the analysis was performed |
-| `github_paths` | Relevant configuration file paths |
-| `distance` | Cosine distance — lower means more similar |
+| `platform` | Affected platform |
+| `cloud_provider` | Cloud provider involved |
+| `action` | Action that was being performed |
+| `score` | Similarity score — higher means more similar |
 
 **Synthesis guidelines:**
 
 1. **Answer the question directly** — lead with a one or two sentence answer
-2. **Group by pattern** — if multiple results share the same root cause category or similar summaries, group them to show frequency
-3. **Cite evidence** — reference job IDs, confidence levels, and dates
-4. **Indicate match quality** — distance < 0.5 is a strong match, 0.5–0.8 is moderate, > 0.8 is weak. Flag weak matches explicitly
-5. **Mention relevant files** — when `github_paths` is non-empty, include them so the user can investigate
-6. **Note limitations** — if all matches are weak or few results returned, say so
+2. **Highlight patterns** — mem0 automatically consolidates similar memories, so each result may represent multiple past incidents
+3. **Cite evidence** — reference confidence levels, platforms, and categories
+4. **Indicate match quality** — score > 0.7 is a strong match, 0.4–0.7 is moderate, < 0.4 is weak. Flag weak matches explicitly
+5. **Note limitations** — if all matches are weak or few results returned, say so
 
 **Output format:**
 
@@ -106,15 +107,17 @@ Transform the JSON results into a clear answer. The JSON array contains objects 
 
 <Direct answer to the user's question in 1-2 sentences>
 
-## Evidence from Past Analyses
+## Matching Patterns
 
-### Pattern: <root_cause_category> (<count> occurrences)
+### <root_cause_category>: <memory summary>
 
-- **Job <job_id>** (<analyzed_at>, confidence: <confidence>, similarity: <strong/moderate/weak>)
-  <root_cause_summary>
-  Files: <github_paths if present>
+<memory text>
 
-<Repeat for each pattern group>
+- **Platform:** <platform>
+- **Cloud provider:** <cloud_provider>
+- **Confidence:** <confidence>, **Similarity:** <strong/moderate/weak>
+
+<Repeat for each matching pattern>
 
 ## Recommendations
 
